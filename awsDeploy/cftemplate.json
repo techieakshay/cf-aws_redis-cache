@@ -1,0 +1,216 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "AWS CloudFormation template to create an ElastiCache Redis Cluster.",
+    "Parameters": {
+        "CacheClusterId": {
+            "Description": "A name for the Redis cluster.",
+            "Type": "String",
+            "Default": "app-redis-cluster"
+        },
+        "VpcId": {
+            "Type": "AWS::EC2::VPC::Id",
+            "Description": "The VPC ID where the ECS Cluster and ALB are deployed.",
+            "Default": "vpc-026a3605217f29788"
+        },
+        "CacheNodeType": {
+            "Description": "The cache node type (e.g., cache.t2.micro, cache.m5.large, etc.).",
+            "Type": "String",
+            "Default": "cache.t2.micro",
+            "AllowedValues": [
+                "cache.t2.micro",
+                "cache.t3.micro",
+                "cache.m5.large",
+                "cache.m5.xlarge",
+                "cache.m5.2xlarge"
+            ],
+            "ConstraintDescription": "Must be a valid cache node type."
+        },
+        "SubnetGroupName": {
+            "Description": "The name of the ElastiCache subnet group for Redis.",
+            "Type": "String",
+            "Default": "default"
+        },
+        "Port": {
+            "Description": "Port for Redis.",
+            "Type": "String",
+            "Default": ""
+        },
+        "EngineVersion": {
+            "Description": "Redis engine version.",
+            "Type": "String",
+            "Default": "6.x",
+            "AllowedValues": [
+                "5.0.6",
+                "5.0.7",
+                "6.x"
+            ],
+            "ConstraintDescription": "Must be a valid Redis engine version."
+        },
+        "NumCacheNodes": {
+            "Description": "The number of cache nodes in the Redis cluster.",
+            "Type": "Number",
+            "Default": "1",
+            "MinValue": "1",
+            "MaxValue": "15",
+            "ConstraintDescription": "Must be between 1 and 15."
+        },
+        "AutomaticFailoverEnabled": {
+            "Description": "Enable Multi-AZ with automatic failover.",
+            "Type": "String",
+            "Default": "false",
+            "AllowedValues": [
+                "true",
+                "false"
+            ]
+        }
+    },
+    "Resources": {
+        "RedisClusterIngressSecurityGroup": {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": {
+                    "Fn::Sub": "${AWS::StackName} Elastic Cache Ingress Group"
+                },
+                "VpcId": {
+                    "Ref" : "VpcId"
+                }
+            }
+        },
+        "RedisClusterSecurityGroup": {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": {
+                    "Fn::Sub": "${AWS::StackName} Elastic Cache Security Group"
+                },
+                "VpcId": {
+                    "Ref" : "VpcId"
+                },
+                "SecurityGroupIngress": [{
+                    "IpProtocol": "tcp",
+                    "FromPort": {
+                        "Fn::If": [
+                            "CustomPort",
+                            {
+                                "Ref" : "Port"
+                            },
+                            "6379"
+                        ]
+                    },
+                    "ToPort":  {
+                        "Fn::If": [
+                            "CustomPort",
+                            {
+                                "Ref" : "Port"
+                            },
+                            "6379"
+                        ]
+                    },
+                    "SourceSecurityGroupId": {
+                        "Ref": "RedisClusterIngressSecurityGroup"
+                    }
+                }]
+            }
+        },
+        "RedisCacheCluster": {
+            "Type": "AWS::ElastiCache::CacheCluster",
+            "Properties": {
+                "ClusterName": {
+                    "Ref": "CacheClusterId"
+                },
+                "Engine": "redis",
+                "CacheNodeType": {
+                    "Ref": "CacheNodeType"
+                },
+                "EngineVersion": {
+                    "Ref": "EngineVersion"
+                },
+                "NumCacheNodes": {
+                    "Ref": "NumCacheNodes"
+                },
+                "VpcSecurityGroupIds": [{
+                    "Ref": "RedisClusterSecurityGroup"
+                }],
+                "CacheSubnetGroupName": {
+                    "Ref": "SubnetGroupName"
+                },
+                "AZMode": "single-az",
+                "AutoMinorVersionUpgrade": true
+            }
+        },
+        "RedisReplicationGroup": {
+            "Type": "AWS::ElastiCache::ReplicationGroup",
+            "Condition": "IsMultiAZEnabled",
+            "Properties": {
+                "ReplicationGroupId": {
+                    "Ref": "CacheClusterId"
+                },
+                "ReplicationGroupDescription": "Redis replication group with failover.",
+                "Engine": "redis",
+                "CacheNodeType": {
+                    "Ref": "CacheNodeType"
+                },
+                "EngineVersion": {
+                    "Ref": "EngineVersion"
+                },
+                "NumCacheClusters": {
+                    "Ref": "NumCacheNodes"
+                },
+                "AutomaticFailoverEnabled": {
+                    "Ref": "AutomaticFailoverEnabled"
+                },
+                "SecurityGroupIds": {
+                    "Ref": "RedisClusterSecurityGroup"
+                },
+                "CacheSubnetGroupName": {
+                    "Ref": "SubnetGroupName"
+                }
+            }
+        }
+    },
+    "Conditions": {
+        "CustomPort": {
+            "Fn::Not": [{
+                "Fn::Equals": [
+                    {
+                        "Ref": "Port"
+                    },
+                    ""
+                ]
+            }]
+        },
+        "IsMultiAZEnabled": {
+            "Fn::Equals": [
+                {
+                    "Ref": "AutomaticFailoverEnabled"
+                },
+                "true"
+            ]
+        }
+    },
+    "Outputs": {
+        "RedisEndpoint": {
+            "Description": "Redis Cluster Endpoint",
+            "Value": {
+                "Fn::GetAtt": [
+                    "RedisCacheCluster",
+                    "RedisEndpoint.Address"
+                ]
+            }
+        },
+        "RedisPort": {
+            "Description": "Redis Port",
+            "Value": {
+                "Fn::GetAtt": [
+                    "RedisCacheCluster",
+                    "RedisEndpoint.Port"
+                ]
+            }
+        },
+        "IngressSecurityGroup": {
+            "Description": "Redis Port",
+            "Value": {
+               "Ref" : "RedisClusterIngressSecurityGroup"
+            }
+        }
+    }
+}
